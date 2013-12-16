@@ -9,7 +9,8 @@ pub trait Measured<V> {
 }
 
 // A useful monoid.
-pub struct Size(u64);
+#[deriving(Clone)]
+pub struct Size(uint);
 impl Monoid for Size {
     fn unit() -> Size { return Size(0); }
     fn join(&self, x: &Size) -> Size {
@@ -45,7 +46,7 @@ impl<V:Monoid, A:Measured<V>> Measured<V> for ~[A] {
 
 
 // ===== 2-3 tree nodes =====
-enum Node<V,A> {
+pub enum Node<V,A> {
     Leaf(A),
     // invariant: exactly 2 or 3 elements
     Node2(V, ~Node<V,A>, ~Node<V,A>),
@@ -198,7 +199,7 @@ impl<V: Monoid + Clone, A:Measured<V>> Tree<V,A> {
     pub fn is_empty(&self) -> bool { match *self { Empty => true, _ => false } }
 
     // ===== Consing =====
-    fn cons_left(~self, x: ~Node<V,A>) -> ~Tree<V,A> {
+    pub fn cons_left(~self, x: ~Node<V,A>) -> ~Tree<V,A> {
         match *self {
             Empty => { ~Single(x) }
             Single(b) => { deep(Digit(~[x]), ~Empty, Digit(~[b])) }
@@ -213,7 +214,7 @@ impl<V: Monoid + Clone, A:Measured<V>> Tree<V,A> {
         }
     }
 
-    fn cons_right(~self, x: ~Node<V,A>) -> ~Tree<V,A> {
+    pub fn cons_right(~self, x: ~Node<V,A>) -> ~Tree<V,A> {
         match *self {
             Empty => { ~Single(x) }
             Single(a) => { deep(Digit(~[a]), ~Empty, Digit(~[x])) }
@@ -229,7 +230,7 @@ impl<V: Monoid + Clone, A:Measured<V>> Tree<V,A> {
     }
 
     // ===== Head & tail access =====
-    fn head_opt<'a>(&'a mut self) -> Option<&'a mut A> {
+    pub fn head_opt<'a>(&'a mut self) -> Option<&'a mut A> {
         assert!(!self.is_empty());
         match *self {
             Empty => None,
@@ -238,7 +239,7 @@ impl<V: Monoid + Clone, A:Measured<V>> Tree<V,A> {
         }
     }
 
-    fn last_opt<'a>(&'a mut self) -> Option<&'a mut A> {
+    pub fn last_opt<'a>(&'a mut self) -> Option<&'a mut A> {
         match *self {
             Empty => None,
             Single(ref mut a) => Some(a.head()),
@@ -246,11 +247,11 @@ impl<V: Monoid + Clone, A:Measured<V>> Tree<V,A> {
         }
     }
 
-    fn head<'a>(&'a mut self) -> &'a mut A { self.head_opt().unwrap() }
-    fn last<'a>(&'a mut self) -> &'a mut A { self.last_opt().unwrap() }
+    pub fn head<'a>(&'a mut self) -> &'a mut A { self.head_opt().unwrap() }
+    pub fn last<'a>(&'a mut self) -> &'a mut A { self.last_opt().unwrap() }
 
     // ===== Views/un =====
-    fn viewL(~self) -> Option<(~Node<V,A>, ~Tree<V,A>)> {
+    pub fn viewL(~self) -> Option<(~Node<V,A>, ~Tree<V,A>)> {
         let mut x = self;
         // Have to do some gymnastics to satisfy the borrow-checker.
         let a = match *x {
@@ -279,7 +280,7 @@ impl<V: Monoid + Clone, A:Measured<V>> Tree<V,A> {
         x
     }
 
-    fn viewR(~self) -> Option<(~Tree<V,A>, ~Node<V,A>)> {
+    pub fn viewR(~self) -> Option<(~Tree<V,A>, ~Node<V,A>)> {
         let mut x = self;
         // Have to do some gymnastics to satisfy the borrow-checker.
         let a = match *x {
@@ -308,7 +309,7 @@ impl<V: Monoid + Clone, A:Measured<V>> Tree<V,A> {
         x
     }
 
-    fn append_array(~self, elems: ~[~Node<V,A>]) -> ~Tree<V,A> {
+    pub fn append_array(~self, elems: ~[~Node<V,A>]) -> ~Tree<V,A> {
         let mut x = self;
         for elem in elems.move_iter() {
             x = x.cons_right(elem);
@@ -316,7 +317,7 @@ impl<V: Monoid + Clone, A:Measured<V>> Tree<V,A> {
         x
     }
 
-    fn prepend_array(~self, elems: ~[~Node<V,A>]) -> ~Tree<V,A> {
+    pub fn prepend_array(~self, elems: ~[~Node<V,A>]) -> ~Tree<V,A> {
         let mut x = self;
         for elem in elems.move_rev_iter() {
             x = x.cons_left(elem);
@@ -325,7 +326,9 @@ impl<V: Monoid + Clone, A:Measured<V>> Tree<V,A> {
     }
 
     // ===== Concatenation =====
-    fn append(~self, other: ~Tree<V,A>) -> ~Tree<V,A> { self.app3(~[], other) }
+    pub fn append(~self, other: ~Tree<V,A>) -> ~Tree<V,A> {
+        self.app3(~[], other)
+    }
 
     fn app3(~self, elems: ~[~Node<V,A>], other: ~Tree<V,A>) -> ~Tree<V,A> {
         match (self, other) {
@@ -373,7 +376,7 @@ impl<V: Monoid + Clone, A:Measured<V>> Tree<V,A> {
     }
 
     // ===== Splitting =====
-    fn split(~self, p: &fn(&V) -> bool) -> (~Tree<V,A>, ~Tree<V,A>) {
+    pub fn split(~self, p: &fn(&V) -> bool) -> (~Tree<V,A>, ~Tree<V,A>) {
         if self.is_empty() {
             return (~Empty, ~Empty);
         }
@@ -425,8 +428,8 @@ impl<V: Monoid + Clone, A:Measured<V>> Tree<V,A> {
     }
 
     // ===== Lookup =====
-    fn lookup<'a>(&'a mut self, p: &fn(&V) -> bool)
-                  -> (V, Option<&'a mut ~Node<V,A>>)
+    pub fn lookup<'a>(&'a mut self, p: &fn(&V) -> bool)
+                      -> (V, Option<&'a mut ~Node<V,A>>)
     {
         if self.is_empty() { return (Monoid::unit(), None) }
         let v = self.measure();
@@ -463,7 +466,4 @@ impl<V: Monoid + Clone, A:Measured<V>> Tree<V,A> {
         let (v,i) = suf.split_pos(vmid, p);
         (v, &mut (*suf)[i.unwrap()])
     }
-}
-
-fn main() {
 }
