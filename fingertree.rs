@@ -91,6 +91,26 @@ impl<V:Monoid+Clone, A:Measured<V>> Node<V,A> {
         }
     }
 
+    fn lookup<'a>(&'a mut self, v: V, p: &fn(&V) -> bool)
+        -> (V, &'a mut ~Node<V,A>)
+    {
+        match self {
+            &Leaf(_) => unreachable!(),
+            &Node2(_, ref mut x, ref mut y) => {
+                let vx = v.join(&x.measure());
+                if p(&vx) { (v, x) }
+                else { (vx, y) }
+            }
+            &Node3(_, ref mut x, ref mut y, ref mut z) => {
+                let vx = v.join(&x.measure());
+                if p(&vx) { return (v, x) }
+                let vy = vx.join(&y.measure());
+                if p(&vy) { (vx, y) }
+                else { (vy, z) }
+            }
+        }
+    }
+
     fn split(~self, v: V, p: &fn(&V) -> bool)
              -> (~[~Node<V,A>], ~Node<V,A>, ~[~Node<V,A>])
     {
@@ -103,9 +123,9 @@ impl<V:Monoid+Clone, A:Measured<V>> Node<V,A> {
             }
             Node3(_, x, y, z) => {
                 let vx = v.join(&x.measure());
+                if p(&vx) { return (~[], x, ~[y,z]) }
                 let vy = vx.join(&y.measure());
-                if p(&vx) { (~[], x, ~[y,z]) }
-                else if p(&vy) { (~[x], y, ~[z]) }
+                if p(&vy) { (~[x], y, ~[z]) }
                 else { (~[x,y], z, ~[]) }
             }
         }
@@ -136,13 +156,14 @@ impl<V:Monoid+Clone, A:Measured<V>> Digit<V,A> {
         }
     }
 
-    fn splitPos(&self, v: V, p: &fn(&V) -> bool) -> Either<V,uint> {
+    fn split_pos(&self, v: V, p: &fn(&V) -> bool) -> (V, Option<uint>) {
         let mut v = v;
         for (idx,elem) in (*self).iter().enumerate() {
-            v = v.join(&elem.measure());
-            if p(&v) { return Right(idx) }
+            let vnew = v.join(&elem.measure());
+            if p(&vnew) { return (v, Some(idx)) }
+            v = vnew;
         }
-        Left(v)
+        (v, None)
     }
 }
 
@@ -376,9 +397,9 @@ impl<V: Monoid + Clone, A:Measured<V>> Tree<V,A> {
         // Since measuring a digit just iterates over all its elements, we might
         // as well just try to split it.
         // We need to eta-expand p to avoid aggro from the borrow-checker (?!).
-        let vpre = match pre.splitPos(v, |x| p(x)) {
-            Left(v) => v,
-            Right(idx) => {
+        let vpre = match pre.split_pos(v, |x| p(x)) {
+            (v, None) => v,
+            (_, Some(idx)) => {
                 let (l,x,r) = split_at(*pre, idx);
                 return ((~Empty).append_array(l),
                         x,
@@ -387,23 +408,61 @@ impl<V: Monoid + Clone, A:Measured<V>> Tree<V,A> {
         };
         assert!(!p(&vpre));
 
-        let vmid = vpre.join(&mid.measure());
+        let vmid = vpre.clone().join(&mid.measure());
         if p(&vmid) {
-            let (ml, xs, mr) = mid.splitNonempty(vmid, |x| p(x));
+            let (ml, xs, mr) = mid.splitNonempty(vpre.clone(), |x| p(x));
             let (l, x, r) = xs.split(vpre.join(&ml.measure()), |x| p(x));
             return (deep(pre, ml, Digit(l)).deepR(),
                     x,
                     deep(Digit(r), mr, suf).deepL())
         }
 
-        let i = match suf.splitPos(vmid, p) { Right(i) => i,
-                                              Left(_) => (*suf).len() - 1 };
+        let (_,i) = suf.split_pos(vmid, p);
+        // TODO: would it be safe to just use i.unwrap() here?
+        let i = match i { None => (*suf).len() - 1, Some(i) => i };
         let (l,x,r) = split_at(*suf, i);
         (deep(pre, mid, Digit(l)).deepR(), x, (~Empty).append_array(r))
     }
 
     // ===== Lookup =====
-    // TODO
+    fn lookup<'a>(&'a mut self, p: &fn(&V) -> bool)
+                  -> (V, Option<&'a mut ~Node<V,A>>)
+    {
+        if self.is_empty() { return (Monoid::unit(), None) }
+        let v = self.measure();
+        if !p(&v) { return (v, None) }
+        let (v, x) = self.lookupUnsafe(Monoid::unit(), p);
+        (v, Some(x))
+    }
+
+    fn lookupUnsafe<'a>(&'a mut self, v: V, p: &fn(&V) -> bool)
+       -> (V, &'a mut ~Node<V,A>)
+    {
+        assert!(!self.is_empty());
+        assert!(p(&v.join(&self.measure())));
+
+        let (pre, mid, suf) = match *self {
+            Empty => unreachable!(),
+            Single(ref mut a) => return (v, a),
+            Deep(_, ref mut pre, ref mut mid, ref mut suf) => (pre, mid, suf)
+        };
+
+        let vpre = match pre.split_pos(v, |x| p(x)) {
+            (v, None) => v,
+            (v, Some(idx)) => return (v, &mut (*pre)[idx])
+        };
+        assert!(!p(&vpre));
+
+        let vmid = vpre.join(&mid.measure());
+        if p(&vmid) {
+            let (vl, xs) = mid.lookupUnsafe(vpre, |x| p(x));
+            let (vx, i) = xs.lookup(vl, p);
+            return (vx, i);
+        }
+
+        let (v,i) = suf.split_pos(vmid, p);
+        (v, &mut (*suf)[i.unwrap()])
+    }
 }
 
 fn main() {
