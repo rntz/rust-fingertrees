@@ -1,10 +1,12 @@
+// ========== Traits and Utilities ==========
 pub trait Monoid {
     fn unit() -> Self;
     fn join(&self, x: &Self) -> Self;
 }
 
-// Useful operations on ~[].
-fn append_move<T>(mut x: ~[T], y: ~[T]) -> ~[T] { x.push_all_move(y); x }
+pub trait Measured<V> {
+    fn measure(&self) -> V;
+}
 
 // A useful monoid.
 pub struct Size(u64);
@@ -15,10 +17,8 @@ impl Monoid for Size {
     }
 }
 
-// Another useful monoid
-pub trait Measured<V> {
-    fn measure(&self) -> V;
-}
+// Useful operations on ~[].
+fn append_move<T>(mut x: ~[T], y: ~[T]) -> ~[T] { x.push_all_move(y); x }
 
 
 // ===== 2-3 tree nodes =====
@@ -47,7 +47,24 @@ impl<V:Monoid+Clone, A:Measured<V>> Node<V,A> {
     fn new3(x: ~Node<V,A>, y: ~Node<V,A>, z: ~Node<V,A>) -> ~Node<V,A> {
         ~Node3(x.measure().join(&y.measure()).join(&z.measure()), x, y, z)
     }
+
+    fn head<'a>(&'a mut self) -> &'a mut A {
+        match *self {
+            Leaf(ref mut a) => a,
+            Node2(_, ref mut x, _) => x.head(),
+            Node3(_, ref mut x, _, _) => x.head(),
+        }
+    }
+
+    fn to_digit(self) -> Digit<V,A> {
+        match self {
+            Node2(_,x,y) => Digit(~[x,y]),
+            Node3(_,x,y,z) => Digit(~[x,y,z]),
+            Leaf(_) => unreachable!()
+        }
+    }
 }
+
 
 // ===== Digits =====
 // invariant: between 1 and 4 elements, inclusive
@@ -62,6 +79,20 @@ impl<V:Monoid+Clone, A:Measured<V>> Measured<V> for Digit<V,A> {
             v = v.join(&x.measure());
         }
         return v;
+    }
+}
+
+impl<V:Monoid+Clone, A:Measured<V>> Digit<V,A> {
+    fn head<'a>(&'a mut self) -> &'a mut A { (*self)[0].head() }
+
+    fn to_tree(self) -> ~Tree<V,A> {
+        match *self {
+            [a] => ~Single(a),
+            [a,b] => Tree::deep(Digit(~[a]), ~Empty, Digit(~[b])),
+            [a,b,c] => Tree::deep(Digit(~[a,b]), ~Empty, Digit(~[c])),
+            [a,b,c,d] =>Tree::deep(Digit(~[a,b]), ~Empty, Digit(~[c,d])),
+            _ => unreachable!()
+        }
     }
 }
 
@@ -93,6 +124,7 @@ impl<V: Monoid + Clone, A:Measured<V>> Tree<V,A> {
         ~Deep(v, pre, mid, suf)
     }
 
+    // ===== Consing =====
     fn cons_left(~self, x: ~Node<V,A>) -> ~Tree<V,A> {
         match *self {
             Empty => { ~Single(x) }
@@ -122,6 +154,87 @@ impl<V: Monoid + Clone, A:Measured<V>> Tree<V,A> {
             }
         }
     }
+
+    // ===== Head & tail access =====
+    fn head_opt<'a>(&'a mut self) -> Option<&'a mut A> {
+        assert!(!self.is_empty());
+        match *self {
+            Empty => None,
+            Single(ref mut a) => Some(a.head()),
+            Deep(_, ref mut pre, _, _) => Some(pre.head()),
+        }
+    }
+
+    fn last_opt<'a>(&'a mut self) -> Option<&'a mut A> {
+        match *self {
+            Empty => None,
+            Single(ref mut a) => Some(a.head()),
+            Deep(_, ref mut pre, _, _) => Some(pre.head()),
+        }
+    }
+
+    fn head<'a>(&'a mut self) -> &'a mut A { self.head_opt().unwrap() }
+    fn last<'a>(&'a mut self) -> &'a mut A { self.last_opt().unwrap() }
+
+    // ===== Views/un =====
+    fn viewL(~self) -> Option<(~Node<V,A>, ~Tree<V,A>)> {
+        let mut x = self;
+        // Have to do some gymnastics to satisfy the borrow-checker.
+        let a = match *x {
+            Empty => return None,
+            Single(a) => return Some((a, ~Empty)),
+            Deep(_, ref mut pre, _, _) => pre.shift(),
+        };
+        Some((a,x.deepL()))
+    }
+
+    fn deepL(~self) -> ~Tree<V,A> {
+        let mut x = self;
+        match x {
+            ~Deep(_, Digit([]), mid, suf) => match mid.viewL() {
+                None => return suf.to_tree(),
+                Some((a, mid)) => {
+                    // TODO?: make this in-place
+                    return Tree::deep(a.to_digit(), mid, suf)
+                }
+            },
+            ~Deep(ref mut v, ref pre, ref mid, ref suf) => {
+                *v = pre.measure().join(&mid.measure()).join(&suf.measure());
+            }
+            _ => unreachable!()
+        }
+        x
+    }
+
+    fn viewR(~self) -> Option<(~Tree<V,A>, ~Node<V,A>)> {
+        let mut x = self;
+        // Have to do some gymnastics to satisfy the borrow-checker.
+        let a = match *x {
+            Empty => return None,
+            Single(a) => return Some((~Empty, a)),
+            Deep(_, _, _, ref mut suf) => suf.pop(),
+        };
+        Some((x.deepR(), a))
+    }
+
+    fn deepR(~self) -> ~Tree<V,A> {
+        let mut x = self;
+        match x {
+            ~Deep(_, pre, mid, Digit([])) => match mid.viewR() {
+                None => return pre.to_tree(),
+                Some((mid, a)) => {
+                    // TODO?: make this in-place
+                    return Tree::deep(pre, mid, a.to_digit())
+                }
+            },
+            ~Deep(ref mut v, ref pre, ref mid, ref suf) => {
+                *v = pre.measure().join(&mid.measure()).join(&suf.measure());
+            }
+            _ => unreachable!()
+        }
+        x
+    }
+
 }
 
 fn main() {
