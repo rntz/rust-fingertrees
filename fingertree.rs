@@ -20,6 +20,16 @@ impl Monoid for Size {
 // Useful operations on ~[].
 fn append_move<T>(mut x: ~[T], y: ~[T]) -> ~[T] { x.push_all_move(y); x }
 
+impl<V:Monoid, A:Measured<V>> Measured<V> for ~[A] {
+    fn measure(&self) -> V {
+        let mut v: V = Monoid::unit();
+        for x in self.iter() {
+            v = v.join(&x.measure());
+        }
+        return v;
+    }
+}
+
 
 // ===== 2-3 tree nodes =====
 enum Node<V,A> {
@@ -37,6 +47,10 @@ impl<V:Monoid + Clone, A:Measured<V>> Measured<V> for Node<V,A> {
             Node3(ref v, _, _, _) => v.clone(),
         }
     }
+}
+
+impl<V:Monoid + Clone, A:Measured<V>> Measured<V> for ~Node<V,A> {
+    fn measure(&self) -> V { (*self).measure() }
 }
 
 impl<V:Monoid+Clone, A:Measured<V>> Node<V,A> {
@@ -72,13 +86,7 @@ struct Digit<V,A>(~[~Node<V,A>]);
 
 impl<V:Monoid+Clone, A:Measured<V>> Measured<V> for Digit<V,A> {
     fn measure(&self) -> V {
-        let mut iter = self.iter();
-        let mut v = match iter.next() { Some(x) => x.measure(),
-                                        None => unreachable!() };
-        for x in iter {
-            v = v.join(&x.measure());
-        }
-        return v;
+        return (*self).measure();
     }
 }
 
@@ -88,9 +96,9 @@ impl<V:Monoid+Clone, A:Measured<V>> Digit<V,A> {
     fn to_tree(self) -> ~Tree<V,A> {
         match *self {
             [a] => ~Single(a),
-            [a,b] => Tree::deep(Digit(~[a]), ~Empty, Digit(~[b])),
-            [a,b,c] => Tree::deep(Digit(~[a,b]), ~Empty, Digit(~[c])),
-            [a,b,c,d] =>Tree::deep(Digit(~[a,b]), ~Empty, Digit(~[c,d])),
+            [a,b] => deep(Digit(~[a]), ~Empty, Digit(~[b])),
+            [a,b,c] => deep(Digit(~[a,b]), ~Empty, Digit(~[c])),
+            [a,b,c,d] => deep(Digit(~[a,b]), ~Empty, Digit(~[c,d])),
             _ => unreachable!()
         }
     }
@@ -113,22 +121,24 @@ impl<V:Monoid + Clone, A: Measured<V>> Measured<V> for Tree<V,A> {
     }
 }
 
+// Hopefully this'll get inlined.
+fn deep<V: Monoid + Clone, A:Measured<V>>
+   (pre: Digit<V,A>, mid: ~Tree<V,A>, suf: Digit<V,A>) -> ~Tree<V,A>
+{
+    let v = pre.measure().join(&mid.measure()).join(&suf.measure());
+    ~Deep(v, pre, mid, suf)
+}
+
 impl<V: Monoid + Clone, A:Measured<V>> Tree<V,A> {
     pub fn empty() -> Tree<V,A> { Empty }
     pub fn singleton(x: A) -> Tree<V,A> { Single(~Leaf(x)) }
     pub fn is_empty(&self) -> bool { match *self { Empty => true, _ => false } }
 
-    // Hopefully this'll get inlined.
-    fn deep(pre: Digit<V,A>, mid: ~Tree<V,A>, suf: Digit<V,A>) -> ~Tree<V,A> {
-        let v = pre.measure().join(&mid.measure()).join(&suf.measure());
-        ~Deep(v, pre, mid, suf)
-    }
-
     // ===== Consing =====
     fn cons_left(~self, x: ~Node<V,A>) -> ~Tree<V,A> {
         match *self {
             Empty => { ~Single(x) }
-            Single(b) => { Tree::deep(Digit(~[x]), ~Empty, Digit(~[b])) }
+            Single(b) => { deep(Digit(~[x]), ~Empty, Digit(~[b])) }
             Deep(v, pre, mid, suf) => {
                 let v = x.measure().join(&v);
                 let (pre, mid) = match *pre {
@@ -143,7 +153,7 @@ impl<V: Monoid + Clone, A:Measured<V>> Tree<V,A> {
     fn cons_right(~self, x: ~Node<V,A>) -> ~Tree<V,A> {
         match *self {
             Empty => { ~Single(x) }
-            Single(a) => { Tree::deep(Digit(~[a]), ~Empty, Digit(~[x])) }
+            Single(a) => { deep(Digit(~[a]), ~Empty, Digit(~[x])) }
             Deep(v, pre, mid, suf) => {
                 let v = x.measure().join(&v);
                 let (mid, suf) = match *suf {
@@ -195,7 +205,7 @@ impl<V: Monoid + Clone, A:Measured<V>> Tree<V,A> {
                 None => return suf.to_tree(),
                 Some((a, mid)) => {
                     // TODO?: make this in-place
-                    return Tree::deep(a.to_digit(), mid, suf)
+                    return deep(a.to_digit(), mid, suf)
                 }
             },
             ~Deep(ref mut v, ref pre, ref mid, ref suf) => {
@@ -224,7 +234,7 @@ impl<V: Monoid + Clone, A:Measured<V>> Tree<V,A> {
                 None => return pre.to_tree(),
                 Some((mid, a)) => {
                     // TODO?: make this in-place
-                    return Tree::deep(pre, mid, a.to_digit())
+                    return deep(pre, mid, a.to_digit())
                 }
             },
             ~Deep(ref mut v, ref pre, ref mid, ref suf) => {
@@ -234,6 +244,73 @@ impl<V: Monoid + Clone, A:Measured<V>> Tree<V,A> {
         }
         x
     }
+
+    fn append_array(~self, elems: ~[~Node<V,A>]) -> ~Tree<V,A> {
+        let mut x = self;
+        for elem in elems.move_iter() {
+            x = x.cons_right(elem);
+        }
+        x
+    }
+
+    fn prepend_array(~self, elems: ~[~Node<V,A>]) -> ~Tree<V,A> {
+        let mut x = self;
+        for elem in elems.move_rev_iter() {
+            x = x.cons_left(elem);
+        }
+        x
+    }
+
+    // ===== Concatenation =====
+    fn append(~self, other: ~Tree<V,A>) -> ~Tree<V,A> { self.app3(~[], other) }
+
+    fn app3(~self, elems: ~[~Node<V,A>], other: ~Tree<V,A>) -> ~Tree<V,A> {
+        match (self, other) {
+            (~Empty, snd) => snd.prepend_array(elems),
+            (fst, ~Empty) => fst.append_array(elems),
+            (~Single(a), snd) => snd.prepend_array(elems).cons_left(a),
+            (fst, ~Single(b)) => fst.append_array(elems).cons_right(b),
+            (~Deep(v1, pre1, mid1, Digit(suf1)),
+             ~Deep(v2, Digit(pre2), mid2, suf2)) => {
+                let v = v1.join(&elems.measure()).join(&v2);
+
+                // Make a list of nodes from suf1, elems, and pre1
+                let mut nodes = ~[];
+                let mut left = suf1.len() + elems.len() + pre2.len();
+                let mut iter = suf1.move_iter().chain(
+                                   elems.move_iter()).chain(
+                                   pre2.move_iter());
+                assert!(left >= 2);
+                while left > 0 {
+                    let a = iter.next().unwrap();
+                    let b = iter.next().unwrap();
+                    match left {
+                        2 => {
+                            nodes.push(Node::new2(a,b));
+                            break;
+                        }
+                        4 => {
+                            nodes.push(Node::new2(a,b));
+                            let c = iter.next().unwrap();
+                            nodes.push(Node::new2(c, iter.next().unwrap()));
+                            break;
+                        }
+                        1 => unreachable!(),
+                        _ => {}
+                    }
+                    // Push the first three and continue
+                    nodes.push(Node::new3(a, b, iter.next().unwrap()));
+                    left -= 3;
+                }
+
+                let mid = mid1.app3(nodes, mid2);
+                ~Deep(v, pre1, mid, suf2)
+            }
+        }
+    }
+
+    // ===== Splitting =====
+    
 
 }
 
