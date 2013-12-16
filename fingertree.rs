@@ -19,6 +19,19 @@ impl Monoid for Size {
 
 // Useful operations on ~[].
 fn append_move<T>(mut x: ~[T], y: ~[T]) -> ~[T] { x.push_all_move(y); x }
+fn split_at<T>(x: ~[T], mut i: uint) -> (~[T], T, ~[T]) {
+    // TODO?: more efficient implementation
+    assert!(i < x.len());
+    let mut a = ~[];
+    a.reserve(i);
+    let mut iter = x.move_iter();
+    while i > 0 {
+        a.push(iter.next().unwrap());
+        i -= 1;
+    }
+    let v = iter.next().unwrap();
+    return (a, v, iter.collect());
+}
 
 impl<V:Monoid, A:Measured<V>> Measured<V> for ~[A] {
     fn measure(&self) -> V {
@@ -77,6 +90,26 @@ impl<V:Monoid+Clone, A:Measured<V>> Node<V,A> {
             Leaf(_) => unreachable!()
         }
     }
+
+    fn split(~self, v: V, p: &fn(&V) -> bool)
+             -> (~[~Node<V,A>], ~Node<V,A>, ~[~Node<V,A>])
+    {
+        match *self {
+            Leaf(_) => unreachable!(),
+            Node2(_, x, y) => {
+                let vx = v.join(&x.measure());
+                if p(&vx) { (~[], x, ~[y]) }
+                else { (~[x], y, ~[]) }
+            }
+            Node3(_, x, y, z) => {
+                let vx = v.join(&x.measure());
+                let vy = vx.join(&y.measure());
+                if p(&vx) { (~[], x, ~[y,z]) }
+                else if p(&vy) { (~[x], y, ~[z]) }
+                else { (~[x,y], z, ~[]) }
+            }
+        }
+    }
 }
 
 
@@ -101,6 +134,15 @@ impl<V:Monoid+Clone, A:Measured<V>> Digit<V,A> {
             [a,b,c,d] => deep(Digit(~[a,b]), ~Empty, Digit(~[c,d])),
             _ => unreachable!()
         }
+    }
+
+    fn splitPos(&self, v: V, p: &fn(&V) -> bool) -> Either<V,uint> {
+        let mut v = v;
+        for (idx,elem) in (*self).iter().enumerate() {
+            v = v.join(&elem.measure());
+            if p(&v) { return Right(idx) }
+        }
+        Left(v)
     }
 }
 
@@ -310,8 +352,58 @@ impl<V: Monoid + Clone, A:Measured<V>> Tree<V,A> {
     }
 
     // ===== Splitting =====
-    
+    fn split(~self, p: &fn(&V) -> bool) -> (~Tree<V,A>, ~Tree<V,A>) {
+        if self.is_empty() {
+            return (~Empty, ~Empty);
+        }
+        if !p(&self.measure()) {
+            return (self, ~Empty)
+        }
+        let (l,x,r) = self.splitNonempty(Monoid::unit(), p);
+        (l, r.cons_left(x))
+    }
 
+    fn splitNonempty(~self, v: V, p: &fn(&V) -> bool)
+        -> (~Tree<V,A>, ~Node<V,A>, ~Tree<V,A>)
+    {
+        assert!(!self.is_empty());
+        let (pre, mid, suf) = match *self {
+            Empty => unreachable!(),
+            Single(a) => return (~Empty, a, ~Empty),
+            Deep(_, pre, mid, suf) => (pre, mid, suf),
+        };
+
+        // Since measuring a digit just iterates over all its elements, we might
+        // as well just try to split it.
+        // We need to eta-expand p to avoid aggro from the borrow-checker (?!).
+        let vpre = match pre.splitPos(v, |x| p(x)) {
+            Left(v) => v,
+            Right(idx) => {
+                let (l,x,r) = split_at(*pre, idx);
+                return ((~Empty).append_array(l),
+                        x,
+                        (deep(Digit(r),mid,suf)).deepL())
+            }
+        };
+        assert!(!p(&vpre));
+
+        let vmid = vpre.join(&mid.measure());
+        if p(&vmid) {
+            let (ml, xs, mr) = mid.splitNonempty(vmid, |x| p(x));
+            let (l, x, r) = xs.split(vpre.join(&ml.measure()), |x| p(x));
+            return (deep(pre, ml, Digit(l)).deepR(),
+                    x,
+                    deep(Digit(r), mr, suf).deepL())
+        }
+
+        let i = match suf.splitPos(vmid, p) { Right(i) => i,
+                                              Left(_) => (*suf).len() - 1 };
+        let (l,x,r) = split_at(*suf, i);
+        (deep(pre, mid, Digit(l)).deepR(), x, (~Empty).append_array(r))
+    }
+
+    // ===== Lookup =====
+    // TODO
 }
 
 fn main() {
