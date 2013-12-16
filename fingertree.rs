@@ -48,7 +48,6 @@ impl<V:Monoid, A:Measured<V>> Measured<V> for ~[A] {
 // ===== 2-3 tree nodes =====
 pub enum Node<V,A> {
     Leaf(A),
-    // invariant: exactly 2 or 3 elements
     Node2(V, ~Node<V,A>, ~Node<V,A>),
     Node3(V, ~Node<V,A>, ~Node<V,A>, ~Node<V,A>),
 }
@@ -251,7 +250,7 @@ impl<V: Monoid + Clone, A:Measured<V>> Tree<V,A> {
     pub fn last<'a>(&'a mut self) -> &'a mut A { self.last_opt().unwrap() }
 
     // ===== Views/un =====
-    pub fn viewL(~self) -> Option<(~Node<V,A>, ~Tree<V,A>)> {
+    pub fn view_left(~self) -> Option<(~Node<V,A>, ~Tree<V,A>)> {
         let mut x = self;
         // Have to do some gymnastics to satisfy the borrow-checker.
         let a = match *x {
@@ -259,13 +258,13 @@ impl<V: Monoid + Clone, A:Measured<V>> Tree<V,A> {
             Single(a) => return Some((a, ~Empty)),
             Deep(_, ref mut pre, _, _) => pre.shift(),
         };
-        Some((a,x.deepL()))
+        Some((a,x.deep_left()))
     }
 
-    fn deepL(~self) -> ~Tree<V,A> {
+    fn deep_left(~self) -> ~Tree<V,A> {
         let mut x = self;
         match x {
-            ~Deep(_, Digit([]), mid, suf) => match mid.viewL() {
+            ~Deep(_, Digit([]), mid, suf) => match mid.view_left() {
                 None => return suf.to_tree(),
                 Some((a, mid)) => {
                     // TODO?: make this in-place
@@ -280,7 +279,7 @@ impl<V: Monoid + Clone, A:Measured<V>> Tree<V,A> {
         x
     }
 
-    pub fn viewR(~self) -> Option<(~Tree<V,A>, ~Node<V,A>)> {
+    pub fn view_right(~self) -> Option<(~Tree<V,A>, ~Node<V,A>)> {
         let mut x = self;
         // Have to do some gymnastics to satisfy the borrow-checker.
         let a = match *x {
@@ -288,13 +287,13 @@ impl<V: Monoid + Clone, A:Measured<V>> Tree<V,A> {
             Single(a) => return Some((~Empty, a)),
             Deep(_, _, _, ref mut suf) => suf.pop(),
         };
-        Some((x.deepR(), a))
+        Some((x.deep_right(), a))
     }
 
-    fn deepR(~self) -> ~Tree<V,A> {
+    fn deep_right(~self) -> ~Tree<V,A> {
         let mut x = self;
         match x {
-            ~Deep(_, pre, mid, Digit([])) => match mid.viewR() {
+            ~Deep(_, pre, mid, Digit([])) => match mid.view_right() {
                 None => return pre.to_tree(),
                 Some((mid, a)) => {
                     // TODO?: make this in-place
@@ -406,7 +405,7 @@ impl<V: Monoid + Clone, A:Measured<V>> Tree<V,A> {
                 let (l,x,r) = split_at(*pre, idx);
                 return ((~Empty).append_array(l),
                         x,
-                        (deep(Digit(r),mid,suf)).deepL())
+                        (deep(Digit(r),mid,suf)).deep_left())
             }
         };
         assert!(!p(&vpre));
@@ -415,16 +414,16 @@ impl<V: Monoid + Clone, A:Measured<V>> Tree<V,A> {
         if p(&vmid) {
             let (ml, xs, mr) = mid.splitNonempty(vpre.clone(), |x| p(x));
             let (l, x, r) = xs.split(vpre.join(&ml.measure()), |x| p(x));
-            return (deep(pre, ml, Digit(l)).deepR(),
+            return (deep(pre, ml, Digit(l)).deep_right(),
                     x,
-                    deep(Digit(r), mr, suf).deepL())
+                    deep(Digit(r), mr, suf).deep_left())
         }
 
         let (_,i) = suf.split_pos(vmid, p);
         // TODO: would it be safe to just use i.unwrap() here?
         let i = match i { None => (*suf).len() - 1, Some(i) => i };
         let (l,x,r) = split_at(*suf, i);
-        (deep(pre, mid, Digit(l)).deepR(), x, (~Empty).append_array(r))
+        (deep(pre, mid, Digit(l)).deep_right(), x, (~Empty).append_array(r))
     }
 
     // ===== Lookup =====
